@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Psychedelic Visualiser</title>
+<meta name="description" content="A psychedelic fractal music visualiser. Listens through the microphone, a browser tab or your computer's sound, a music file, or plays its own demo track.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 fill=%27%2306030f%27/%3E%3Cpath d=%27M5 16h3l2-7 3 14 3-18 3 20 3-12 2 3h3%27 fill=%27none%27 stroke=%27%23ff4fb8%27 stroke-width=%272.4%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* Layout: full-bleed shader canvas; a source picker over it at the start, then one auto-hiding control bar.
+     Single dark theme by choice: this is a light show. Sized to be read from a sofa on a TV. */
+  color-scheme: dark;
+  --void:#06030f;
+  --ink:#f1ecf7;
+  --dim:#a29bb4;
+  --line:rgba(241,236,247,.2);
+  --hot:#ff4fb8;
+  --cool:#5ff0ff;
+  --display:"Cormorant Garamond","Iowan Old Style",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--void);color:var(--ink);font-family:var(--mono);font-size:13px;line-height:1.5;overflow:hidden;-webkit-font-smoothing:antialiased}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+button,select{font:inherit;color:var(--ink);background:rgba(6,3,15,.55);border:1px solid var(--line);border-radius:2px;padding:10px 14px;cursor:pointer;letter-spacing:.1em;text-transform:uppercase;font-size:11px}
+button:hover{border-color:var(--hot);color:var(--hot)}
+/* big, obvious focus: TV remotes move focus with the arrow keys */
+button:focus-visible{outline:3px solid var(--cool);outline-offset:3px}
+button[aria-pressed="true"]{border-color:var(--hot);color:var(--hot)}
+
+/* ---------- the start: choose what to listen to */
+.start{position:fixed;inset:0;display:flex;align-items:safe center;justify-content:center;overflow-y:auto;padding:24px max(16px,env(safe-area-inset-left,0px));z-index:3;
+  background:radial-gradient(ellipse at 50% 40%,rgba(6,3,15,.35),rgba(6,3,15,.88) 70%)}
+.start[hidden]{display:none}
+.panel{width:100%;max-width:880px;display:flex;flex-direction:column;gap:22px}
+h1{font-family:var(--display);font-style:italic;font-weight:500;font-size:clamp(40px,7vw,76px);line-height:1;margin:0;text-wrap:balance;
+  background:linear-gradient(90deg,#ff4fb8,#ffd34f,#5ff0ff,#b6ff6a,#ff4fb8);background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:flow 12s linear infinite}
+@keyframes flow{to{background-position:300% 0}}
+@media (prefers-reduced-motion:reduce){h1{animation:none}}
+.lede{margin:0;color:var(--dim);max-width:60ch;font-size:14px}
+.sources{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.src{display:flex;flex-direction:column;align-items:flex-start;gap:8px;text-align:left;text-transform:none;letter-spacing:0;padding:18px;font-size:13px;min-height:150px}
+.src b{font-size:13px;letter-spacing:.12em;text-transform:uppercase;font-weight:500}
+.src span{color:var(--dim);font-size:12px;line-height:1.45}
+.src:hover span,.src:focus-visible span{color:var(--ink)}
+.msg{margin:0;color:#ffb3d9;min-height:1.5em;max-width:70ch}
+.keys{margin:0;color:var(--dim);font-size:11px;letter-spacing:.04em}
+.keys kbd{font:inherit;border:1px solid var(--line);border-radius:2px;padding:0 5px;color:var(--ink)}
+
+/* ---------- while playing: one bar, gone when nobody touches anything */
+.bar{position:fixed;left:0;right:0;bottom:0;padding:60px max(16px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));
+  background:linear-gradient(to top,rgba(6,3,15,.85),rgba(6,3,15,.5) 50%,rgba(6,3,15,0));display:flex;flex-wrap:wrap;align-items:center;gap:8px;z-index:2;transition:opacity .6s}
+.bar[hidden]{display:none}
+body.idle .bar{opacity:0;pointer-events:none}
+body.idle{cursor:none}
+.now{flex:1 1 220px;min-width:0;display:flex;flex-direction:column;gap:2px}
+.now b{font-family:var(--display);font-style:italic;font-weight:500;font-size:26px;line-height:1.1;letter-spacing:0}
+.now span{color:var(--dim);font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meter{display:flex;gap:3px;align-items:flex-end;height:26px}
+.meter i{width:6px;background:var(--hot);border-radius:1px;height:2px;transition:height .05s}
+audio{display:none}
+.fail{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center}
+@media (max-width:640px){
+  .bar .wide{display:none}
+  .now b{font-size:21px}
+  .src{min-height:0}
+}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Fractal shapes and colours that move with the music"></canvas>
+
+<section class="start" id="start" aria-labelledby="h">
+  <div class="panel">
+    <h1 id="h">Psychedelic Visualiser</h1>
+    <p class="lede">Fractals that move with music. Choose what to listen to. Nothing you play leaves your device: the sound is analysed in this page and never recorded or sent anywhere.</p>
+    <div class="sources" role="group" aria-label="What to listen to">
+      <button class="src" id="useMic" type="button"><b>Microphone</b><span>Hears whatever is playing in the room: a phone, a TV, a speaker, a band. Works with any music app.</span></button>
+      <button class="src" id="useTab" type="button"><b>Tab or computer sound</b><span>Spotify, YouTube or any app on this computer, directly, no microphone. Chrome or Edge on a computer: tick "Share audio" when asked.</span></button>
+      <button class="src" id="useFile" type="button"><b>Music file</b><span>Play your own MP3, WAV, FLAC or M4A files. Several at once make a playlist. You can also drop files here.</span></button>
+      <button class="src" id="useDemo" type="button"><b>Demo track</b><span>A track made live by this page. Works anywhere, including on TVs and in previews that block the microphone.</span></button>
+    </div>
+    <p class="msg" id="msg" role="status"></p>
+    <p class="keys">Keys and TV remotes: <kbd>←</kbd> <kbd>→</kbd> scene · <kbd>↑</kbd> <kbd>↓</kbd> colours · <kbd>OK</kbd>/<kbd>Enter</kbd> controls · <kbd>F</kbd> full screen · <kbd>O</kbd> ring · <kbd>K</kbd> kaleidoscope · <kbd>+</kbd> <kbd>−</kbd> sensitivity · <kbd>Esc</kbd> change source</p>
+  </div>
+</section>
+<input id="file" type="file" accept="audio/*,video/*,.mp3,.m4a,.flac,.wav,.ogg,.opus,.aac" multiple hidden>
+<audio id="player" crossorigin="anonymous"></audio>
+
+<div class="bar" id="bar" hidden>
+  <div class="now"><b id="scene">Julia bloom</b><span id="status">listening</span></div>
+  <div class="meter" id="meter" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <button id="prev" type="button" title="Previous scene (←)">◀</button>
+  <button id="next" type="button" title="Next scene (→)">▶</button>
+  <button id="auto" type="button" aria-pressed="true" title="Change scene with the music">Auto</button>
+  <button id="colours" type="button" title="Next colours (↓)">Colours</button>
+  <button id="ring" type="button" aria-pressed="true" class="wide" title="Spectrum ring (O)">Ring</button>
+  <button id="kaleido" type="button" aria-pressed="false" class="wide" title="Kaleidoscope (K)">Kaleido</button>
+  <button id="less" type="button" class="wide" title="Less sensitive (−)">−</button>
+  <button id="more" type="button" class="wide" title="More sensitive (+)">+</button>
+  <button id="skip" type="button" title="Next file" hidden>Next file</button>
+  <button id="full" type="button" title="Full screen (F)">Full screen</button>
+  <button id="source" type="button" title="Change what to listen to (Esc)">Source</button>
+</div>
+<div class="fail" id="fail">This visualiser needs WebGL2. Open it in a current version of Chrome, Safari, Edge or Firefox.</div>
+
+<script src="analysis.js"></script>
+<script src="demo.js"></script>
+<script>
+(function(){
+"use strict";
+
+// =====================================================================================================
+// Shaders. One scene pass, drawn into a texture over a warped, fading copy of the last frame (the trails),
+// then copied to the screen.
+// =====================================================================================================
+var FS_SCENE=`#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform float uTime, uBass, uLow, uMid, uHigh, uEnergy, uBeat, uFade, uTrail, uRing, uKaleido, uFlow, uMix;
+uniform int uScene, uIter;
+uniform vec2 uK, uC0;
+uniform float uZoom, uRot, uPower;
+uniform vec3 uEye;
+uniform highp sampler2D uPrev, uSpec;
+uniform vec3 uA[4], uB[4];
+out vec4 o;
+const float TAU=6.2831853;
+vec3 pal(float x,vec3 a,vec3 b,vec3 c,vec3 d){return a+b*cos(TAU*(c*x+d));}
+vec3 palette(float x){return mix(pal(x,uA[0],uA[1],uA[2],uA[3]),pal(x,uB[0],uB[1],uB[2],uB[3]),uMix);}
+vec2 rot(vec2 p,float a){float c=cos(a),s=sin(a);return vec2(c*p.x-s*p.y,s*p.x+c*p.y);}
+
+// 0: a Julia set whose constant travels round the edge of the Mandelbrot set, pushed along by the music
+vec3 julia(vec2 p){
+  vec2 z=rot(p,uRot)*uZoom, c=uK;
+  float n=0., trap=1e9;
+  for(int i=0;i<400;i++){
+    if(i>=uIter)break;
+    z=vec2(z.x*z.x-z.y*z.y,2.*z.x*z.y)+c;
+    float r=dot(z,z);
+    trap=min(trap,abs(z.x*z.y));
+    if(r>256.)break;
+    n++;
+  }
+  if(n>=float(uIter))return palette(trap*4.-uTime*uFlow*.5)*(.12+.5*uBass)*exp(-trap*6.);
+  float mu=n+1.-log2(log(length(z))*.5/log(2.)+1e-9);
+  float x=mu*.04-uTime*uFlow+uMid*.25;
+  vec3 col=palette(x)*(.15+.95*clamp(mu/28.,0.,1.));
+  col+=palette(x+.5)*exp(-trap*25.)*(.3+1.4*uHigh);
+  return col;
+}
+// 1: an endless dive into the Mandelbrot set, toward a point whose surroundings repeat at every scale
+vec3 tunnel(vec2 p){
+  vec2 c=uC0+rot(p,uRot)*uZoom, z=vec2(0);
+  float n=0., trap=1e9;
+  for(int i=0;i<900;i++){
+    if(i>=uIter)break;
+    z=vec2(z.x*z.x-z.y*z.y,2.*z.x*z.y)+c;
+    float r=dot(z,z);
+    trap=min(trap,r);
+    if(r>256.)break;
+    n++;
+  }
+  if(n>=float(uIter))return palette(sqrt(sqrt(trap))*2.-uTime*uFlow*.5)*.1*(1.+uBass);
+  float mu=n+1.-log2(log(length(z))*.5/log(2.)+1e-9);
+  float x=sqrt(mu)*.45-uTime*uFlow+uLow*.3;
+  return palette(x)*(.25+.8*clamp(mu/60.,0.,1.))+palette(x+.5)*uHigh*.25*clamp(mu/90.,0.,1.);
+}
+// 2: the Mandelbulb, its power breathing with the bass
+float de(vec3 p,out float trap){
+  vec3 z=p; float dr=1., r=0.; trap=1e9;
+  for(int i=0;i<7;i++){
+    r=length(z); if(r>2.)break; trap=min(trap,r);
+    float th=acos(clamp(z.z/r,-1.,1.))*uPower, ph=atan(z.y,z.x)*uPower;
+    dr=pow(r,uPower-1.)*uPower*dr+1.;
+    z=pow(r,uPower)*vec3(sin(th)*cos(ph),sin(th)*sin(ph),cos(th))+p;
+  }
+  return .5*log(max(r,1e-6))*r/dr;
+}
+vec3 bulb(vec2 q){
+  vec3 f=normalize(-uEye), r=normalize(cross(f,vec3(0,0,1))), u=cross(r,f);
+  vec3 rd=normalize(f+1.35*(q.x*r+q.y*u)), p;
+  float b=dot(uEye,rd), c=dot(uEye,uEye)-1.44, disc=b*b-c, t=0., closest=1e9, trap=1e9;
+  bool hit=false; float steps=0.;
+  if(disc>0.){
+    t=max(0.,-b-sqrt(disc)); float tmax=-b+sqrt(disc);
+    for(int i=0;i<110;i++){
+      p=uEye+rd*t; float d=de(p,trap); closest=min(closest,d/max(t,1e-3));
+      if(d<.0012*t){hit=true;break;}
+      t+=d*.9; steps+=1.; if(t>tmax)break;
+    }
+  }
+  if(!hit)return palette(-uTime*uFlow*.5+q.y*.3)*(.03+.8*exp(-closest*50.)*(.4+uBass));
+  float tr;
+  vec2 e=vec2(.0015*t,-.0015*t);
+  vec3 n=normalize(e.xyy*de(p+e.xyy,tr)+e.yyx*de(p+e.yyx,tr)+e.yxy*de(p+e.yxy,tr)+e.xxx*de(p+e.xxx,tr));
+  float dif=max(dot(n,normalize(vec3(.6,-.5,.9))),0.), rim=pow(1.-max(dot(n,-rd),0.),3.);
+  float x=trap*3.-uTime*uFlow+steps*.006;
+  return palette(x)*(.3+1.*dif)*(1.-steps/140.)+palette(x+.5)*rim*(.6+1.5*uHigh);
+}
+void main(){
+  vec2 frag=gl_FragCoord.xy, uv=frag/uRes;
+  vec2 p=(frag-.5*uRes)/min(uRes.x,uRes.y);
+  vec2 sp=p;
+  // kaleidoscope: fold the picture into six mirrored slices
+  if(uKaleido>0.){
+    float a=atan(p.y,p.x), r=length(p), k=TAU/6.;
+    a=mod(a,k); a=abs(a-k*.5);
+    p=mix(p,r*vec2(cos(a),sin(a)),uKaleido);
+  }
+  vec3 col=uScene==0?julia(p*2.4):uScene==1?tunnel(p):bulb(p);
+  col*=uFade*(1.+uBeat*.35);
+  // the spectrum, bent into a ring: low notes at the top, high notes round to the bottom, mirrored
+  if(uRing>0.){
+    float a=atan(sp.x,sp.y)/3.14159265, r=length(sp);
+    float s=texture(uSpec,vec2(abs(a),.5)).r;
+    float r0=.3+uBass*.045, d=abs(r-(r0+s*.14));
+    col+=palette(abs(a)*.7-uTime*uFlow*2.)*(exp(-d*170.)*1.3+exp(-d*28.)*.25)*s*uRing*uFade;
+  }
+  // trails: last frame, drawn a touch larger and turned, fading; the new frame shows through where brighter
+  vec2 w=(uv-.5);
+  w=rot(w,.004+uMid*.012)*(.985-uBass*.02)+.5;
+  vec3 prev=texture(uPrev,w).rgb;
+  col=max(col,prev*uTrail);
+  float lum=dot(col,vec3(.299,.587,.114));
+  col=mix(vec3(lum),col,1.3);
+  o=vec4(clamp(col,0.,1.),1.);
+}`;
+var FS_COPY=`#version 300 es
+precision highp float;
+uniform highp sampler2D uTex;
+uniform vec2 uRes;
+out vec4 o;
+void main(){
+  vec2 uv=gl_FragCoord.xy/uRes, q=uv-.5;
+  vec3 c=texture(uTex,uv).rgb*(1.-.45*dot(q,q));
+  o=vec4(pow(c,vec3(.95)),1.);
+}`;
+var VS=`#version 300 es
+void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0.,1.);}`;
+
+var canvas=document.getElementById("c");
+var gl=canvas.getContext("webgl2",{antialias:false,alpha:false,powerPreference:"high-performance"});
+if(!gl){document.getElementById("fail").style.display="flex";document.getElementById("start").hidden=true;return;}
+function sh(type,src){var s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;}
+function prog(fs){
+  var p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,VS));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));
+  var u={},n=gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);
+  for(var i=0;i<n;i++){var nm=gl.getActiveUniform(p,i).name.replace("[0]","");u[nm]=gl.getUniformLocation(p,nm);}
+  return {p:p,u:u};
+}
+var PS=prog(FS_SCENE),PC=prog(FS_COPY);
+function tex(w,h){
+  var t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  return t;
+}
+var ping=[null,null],fbo=[gl.createFramebuffer(),gl.createFramebuffer()],cur=0,W=0,H=0;
+// spectrum texture: 64 bands from low to high, log-spaced like hearing
+var SPEC_N=64,specTex=gl.createTexture(),specBuf=new Uint8Array(SPEC_N);
+gl.bindTexture(gl.TEXTURE_2D,specTex);
+gl.texImage2D(gl.TEXTURE_2D,0,gl.R8,SPEC_N,1,0,gl.RED,gl.UNSIGNED_BYTE,specBuf);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+
+// resolution follows the device: TVs and phones have slow GPUs, so the scale drops until frames are quick
+var scale=window.matchMedia("(pointer:coarse)").matches?.5:.75,frameMs=16,slow=0,fast=0;
+var FIXED=/[?&]scale=([\d.]+)/.exec(location.search);
+function resize(){
+  var dpr=Math.min(window.devicePixelRatio||1,2),s=FIXED?parseFloat(FIXED[1]):scale;
+  var w=Math.max(64,Math.round(canvas.clientWidth*dpr*s)),h=Math.max(64,Math.round(canvas.clientHeight*dpr*s));
+  if(w===W&&h===H)return;
+  W=w;H=h;canvas.width=w;canvas.height=h;
+  for(var i=0;i<2;i++){
+    if(ping[i])gl.deleteTexture(ping[i]);
+    ping[i]=tex(w,h);gl.bindFramebuffer(gl.FRAMEBUFFER,fbo[i]);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,ping[i],0);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+}
+function adapt(dt){
+  if(FIXED)return;
+  if(frameMs>40){slow+=dt;fast=0;}else if(frameMs<20){fast+=dt;slow=0;}else slow=fast=0;
+  if(slow>1.2){scale=Math.max(.25,scale*.85);slow=0;}
+  else if(fast>4){scale=Math.min(1,scale*1.08);fast=0;}
+}
+
+// =====================================================================================================
+// Colours and scenes (artistic choices)
+// =====================================================================================================
+var PALETTES=[
+  ["prism",[[.5,.5,.5],[.5,.5,.5],[1,1,1],[0,.33,.67]]],
+  ["ultraviolet",[[.55,.35,.65],[.45,.35,.4],[1,1,1],[.78,.95,.12]]],
+  ["solar",[[.65,.4,.25],[.45,.4,.35],[1,1,.5],[0,.12,.2]]],
+  ["aurora",[[.3,.6,.5],[.4,.45,.45],[1,.8,1],[.55,.25,.85]]],
+  ["acid",[[.55,.6,.35],[.45,.45,.45],[1.5,1,.5],[.25,.05,.6]]],
+  ["candy",[[.7,.45,.7],[.3,.45,.3],[1,1,1],[0,.5,.7]]],
+  ["ice",[[.3,.45,.7],[.4,.45,.35],[1,1,.8],[.6,.7,.8]]],
+  ["fire",[[.6,.3,.15],[.55,.4,.3],[1,1,1],[0,.15,.3]]],
+  ["sherbet",[[.7,.5,.6],[.3,.4,.35],[1,1.5,1],[.9,.4,.15]]]
+];
+var SCENES=["Julia bloom","Endless dive","Mandelbulb"];
+var scene=0,pal=0,palFrom=0,palMix=1,ringOn=true,kaleido=0,kaleidoTarget=0,autoOn=true,sens=1;
+var fade=1,switching=0,pendingScene=-1,trailBoost=0;
+function flat(i){return [].concat.apply([],PALETTES[i][1]);}
+function setScene(s){
+  pendingScene=((s%SCENES.length)+SCENES.length)%SCENES.length;switching=1;trailBoost=1;beatsInScene=0;sceneTime=0;
+}
+function nextPalette(d){palFrom=pal;pal=((pal+(d||1))%PALETTES.length+PALETTES.length)%PALETTES.length;palMix=0;}
+
+// =====================================================================================================
+// Sound in
+// =====================================================================================================
+var AC=null,analyser=null,freq=null,current=null,input=null,toSpeakers=null;
+var player=document.getElementById("player"),playerSource=null,playlist=[],track=0;
+var msg=document.getElementById("msg"),startEl=document.getElementById("start"),bar=document.getElementById("bar");
+var statusEl=document.getElementById("status"),sceneEl=document.getElementById("scene"),skipBtn=document.getElementById("skip");
+function audioContext(){
+  if(!AC){
+    var Ctx=window.AudioContext||window.webkitAudioContext;AC=new Ctx();
+    analyser=AC.createAnalyser();analyser.fftSize=2048;analyser.smoothingTimeConstant=.55;
+    freq=new Uint8Array(analyser.frequencyBinCount);
+    toSpeakers=AC.createGain();toSpeakers.connect(AC.destination);
+  }
+  AC.resume();
+  return AC;
+}
+function stopCurrent(){
+  if(!current)return;
+  try{current.stop();}catch(e){}
+  current=null;
+}
+// the microphone: every "helpful" voice-call filter off, since they flatten music
+function useMic(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)return fail("This browser or view has no microphone access. Try Demo track or Music file, or open the page from its web address in Chrome, Edge, Safari or Firefox.");
+  audioContext();
+  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}}).then(function(stream){
+    stopCurrent();
+    var src=AC.createMediaStreamSource(stream);src.connect(analyser);   // not to the speakers: that would howl
+    current={label:"Microphone",stop:function(){src.disconnect();stream.getTracks().forEach(function(t){t.stop();});}};
+    go();
+  }).catch(function(e){
+    fail(e&&e.name==="NotAllowedError"?"The microphone was not allowed. Allow it in the browser's site settings and try again, or choose another source. (Previews that embed this page may block it: open the page's own web address.)":
+      "No microphone could be opened ("+(e&&e.name||"error")+"). Is one connected? Or choose another source.");
+  });
+}
+// a tab, a window or the whole screen, for its sound: Chrome and Edge on a computer
+function useTab(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getDisplayMedia)return fail("This browser cannot share tab or computer sound. Use Chrome or Edge on a computer, or choose Microphone.");
+  audioContext();
+  navigator.mediaDevices.getDisplayMedia({video:true,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,suppressLocalAudioPlayback:false},
+    systemAudio:"include",selfBrowserSurface:"exclude",preferCurrentTab:false}).then(function(stream){
+    var tracks=stream.getAudioTracks();
+    if(!tracks.length){stream.getTracks().forEach(function(t){t.stop();});return fail("No sound was shared. Choose again, and tick \"Share tab audio\" (or \"Share system audio\" for the whole screen on Windows).");}
+    stopCurrent();
+    // the picture is not needed; the sound keeps flowing without it
+    stream.getVideoTracks().forEach(function(t){t.stop();});
+    var src=AC.createMediaStreamSource(new MediaStream(tracks));src.connect(analyser);
+    tracks[0].addEventListener("ended",function(){if(current&&current.src===src)showStart("Sharing stopped. Choose what to listen to.");});
+    current={src:src,label:"Shared sound: "+(tracks[0].label||"tab"),stop:function(){src.disconnect();tracks.forEach(function(t){t.stop();});}};
+    go();
+  }).catch(function(e){fail(e&&e.name==="NotAllowedError"?"Sharing was cancelled or blocked. Try again and pick a tab, or choose another source.":"Sharing failed ("+(e&&e.name||"error")+").");});
+}
+function useFiles(files){
+  files=Array.prototype.filter.call(files||[],function(f){return /^(audio|video)\//.test(f.type)||/\.(mp3|m4a|flac|wav|ogg|opus|aac)$/i.test(f.name);});
+  if(!files.length)return fail("Those were not music files. Try MP3, M4A, FLAC, WAV or OGG.");
+  audioContext();stopCurrent();
+  playlist.forEach(function(p){URL.revokeObjectURL(p.url);});
+  playlist=files.map(function(f){return {name:f.name.replace(/\.[^.]+$/,""),url:URL.createObjectURL(f)};});
+  track=0;
+  if(!playerSource){playerSource=AC.createMediaElementSource(player);playerSource.connect(analyser);playerSource.connect(toSpeakers);}
+  current={label:"",stop:function(){player.pause();}};
+  playTrack();
+  skipBtn.hidden=playlist.length<2;
+  go();
+}
+function playTrack(){
+  var t=playlist[track];player.src=t.url;current.label="Playing: "+t.name;
+  player.play().catch(function(){fail("This file could not be played. Try another format.");});
+}
+player.addEventListener("ended",function(){if(!playlist.length)return;track=(track+1)%playlist.length;playTrack();});
+skipBtn.addEventListener("click",function(){if(playlist.length){track=(track+1)%playlist.length;playTrack();}});
+function useDemo(){
+  audioContext();stopCurrent();
+  var g=AC.createGain();g.connect(analyser);g.connect(toSpeakers);
+  var d=createDemo(AC,g);
+  current={label:"Demo track · 118 BPM",stop:function(){d.stop();setTimeout(function(){g.disconnect();},700);}};
+  go();
+}
+function fail(text){msg.textContent=text;}
+function go(){
+  msg.textContent="";startEl.hidden=true;bar.hidden=false;started=true;holdScreen();poke();
+  document.getElementById("source").focus({preventScroll:true});
+}
+function showStart(text){
+  stopCurrent();started=false;bar.hidden=true;startEl.hidden=false;msg.textContent=text||"";
+  document.getElementById("useMic").focus({preventScroll:true});
+}
+document.getElementById("useMic").addEventListener("click",useMic);
+document.getElementById("useTab").addEventListener("click",useTab);
+var fileIn=document.getElementById("file");
+document.getElementById("useFile").addEventListener("click",function(){fileIn.value="";fileIn.click();});
+fileIn.addEventListener("change",function(){useFiles(fileIn.files);});
+document.getElementById("useDemo").addEventListener("click",useDemo);
+window.addEventListener("dragover",function(e){e.preventDefault();});
+window.addEventListener("drop",function(e){e.preventDefault();if(e.dataTransfer&&e.dataTransfer.files.length)useFiles(e.dataTransfer.files);});
+// a tab or computer sound needs a computer browser that can share it
+if(!(navigator.mediaDevices&&navigator.mediaDevices.getDisplayMedia)||window.matchMedia("(pointer:coarse)").matches)document.getElementById("useTab").hidden=true;
+
+// =====================================================================================================
+// Controls: mouse, touch, keyboard and TV remote
+// =====================================================================================================
+var started=false,idleTimer=0;
+function poke(){document.body.classList.remove("idle");clearTimeout(idleTimer);if(started)idleTimer=setTimeout(function(){document.body.classList.add("idle");},3500);}
+["pointermove","pointerdown"].forEach(function(ev){window.addEventListener(ev,poke,{passive:true});});
+function press(id,fn){document.getElementById(id).addEventListener("click",function(){fn();poke();});}
+press("prev",function(){setScene(scene-1);});
+press("next",function(){setScene(scene+1);});
+press("auto",function(){autoOn=!autoOn;document.getElementById("auto").setAttribute("aria-pressed",String(autoOn));});
+press("colours",function(){nextPalette(1);});
+press("ring",function(){ringOn=!ringOn;document.getElementById("ring").setAttribute("aria-pressed",String(ringOn));});
+press("kaleido",function(){kaleidoTarget=kaleidoTarget?0:1;document.getElementById("kaleido").setAttribute("aria-pressed",String(!!kaleidoTarget));});
+press("less",function(){sens=Math.max(.3,sens/1.25);flash("sensitivity "+Math.round(sens*100)+"%");});
+press("more",function(){sens=Math.min(4,sens*1.25);flash("sensitivity "+Math.round(sens*100)+"%");});
+press("full",toggleFull);
+press("source",function(){showStart("");});
+function toggleFull(){
+  try{
+    if(document.fullscreenElement)document.exitFullscreen();
+    else{var p=document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen();if(p&&p.catch)p.catch(function(){flash("full screen is not allowed here");});}
+  }catch(e){flash("full screen is not allowed here");}
+}
+var flashText="",flashUntil=0;
+function flash(t){flashText=t;flashUntil=performance.now()+1800;}
+window.addEventListener("keydown",function(e){
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  var hidden=document.body.classList.contains("idle")||!started;
+  poke();
+  if(!started)return;
+  var k=e.key;
+  // while the bar is hidden, arrows steer the show; once it shows, they move between buttons as usual
+  if(hidden&&(k==="ArrowRight"||k==="ArrowLeft")){e.preventDefault();setScene(scene+(k==="ArrowRight"?1:-1));return;}
+  if(hidden&&(k==="ArrowUp"||k==="ArrowDown")){e.preventDefault();nextPalette(k==="ArrowDown"?1:-1);return;}
+  if(hidden&&(k==="Enter"||k===" ")){e.preventDefault();document.getElementById("next").focus();return;}
+  if(k==="f"||k==="F")toggleFull();
+  else if(k==="o"||k==="O")document.getElementById("ring").click();
+  else if(k==="k"||k==="K")document.getElementById("kaleido").click();
+  else if(k==="+"||k==="=")document.getElementById("more").click();
+  else if(k==="-"||k==="_")document.getElementById("less").click();
+  else if(k==="Escape"||k==="Backspace"||k==="GoBack"||k==="BrowserBack"){if(!document.fullscreenElement){e.preventDefault();showStart("");}}
+});
+var wakeLock=null;
+function holdScreen(){if(wakeLock||!("wakeLock" in navigator))return;navigator.wakeLock.request("screen").then(function(l){wakeLock=l;l.addEventListener("release",function(){wakeLock=null;});}).catch(function(){});}
+document.addEventListener("visibilitychange",function(){if(!document.hidden&&started)holdScreen();});
+
+// =====================================================================================================
+// Listening: bands, beats and the show's own clock
+// =====================================================================================================
+var A=window.VisAnalysis,beats=A.beatDetector();
+var fb={bass:A.follower(.015,.25),low:A.follower(.02,.3),mid:A.follower(.03,.35),high:A.follower(.01,.2),energy:A.follower(.05,.6)};
+var beatsTotal=0,peak=.15,level={bass:0,low:0,mid:0,high:0,energy:0},beatPulse=0,beatsInScene=0,sceneTime=0,quiet=0;
+var meterBars=document.querySelectorAll("#meter i");
+function listen(dt){
+  var raw={bass:0,low:0,mid:0,high:0,energy:0};
+  if(analyser&&current){
+    analyser.getByteFrequencyData(freq);
+    raw=A.bands(freq,AC.sampleRate/analyser.fftSize);
+    // 64 log-spaced bands for the ring
+    var n=freq.length,lo=Math.log(30),hi=Math.log(14000),bin=AC.sampleRate/analyser.fftSize;
+    for(var i=0;i<SPEC_N;i++){
+      var a=Math.floor(Math.exp(lo+(hi-lo)*i/SPEC_N)/bin),b=Math.max(a+1,Math.floor(Math.exp(lo+(hi-lo)*(i+1)/SPEC_N)/bin)),s=0;
+      for(var j=a;j<b&&j<n;j++)s=Math.max(s,freq[j]);
+      specBuf[i]=Math.min(255,s*Math.min(2,sens*.6/Math.max(.08,peak)));
+    }
+  }else specBuf.fill(0);
+  // automatic gain: a quiet microphone across the room and a loud file both fill the range
+  peak=Math.max(raw.energy,peak*Math.exp(-dt/8),.04);
+  var g=sens*.55/peak;
+  Object.keys(level).forEach(function(k){level[k]=Math.min(1.5,fb[k](raw[k]*g,dt));});
+  var hit=current&&beats.update(raw.bass*g,dt);
+  if(hit){beatPulse=1;beatsInScene++;beatsTotal++;}
+  beatPulse*=Math.exp(-dt/.18);
+  quiet=level.energy<.04?quiet+dt:0;
+  meterBars.forEach(function(m,i){m.style.height=Math.round(2+24*Math.min(1,level[["bass","low","mid","high"][i]]))+"px";});
+  return hit;
+}
+
+// =====================================================================================================
+// The show
+// =====================================================================================================
+var time=0,theta=0,dive=0,yaw=.6,rotA=0,last=performance.now(),statusTick=0;
+var C0=[-.10109636384562,.95628651080914];   // where the endless dive goes: spirals inside spirals
+function frame(now){
+  frameMs=frameMs*.9+(now-last)*.1;
+  var dt=Math.min(.05,(now-last)/1000);last=now;
+  adapt(dt);resize();
+  var hit=listen(dt);
+  var e=level.energy,bass=level.bass;
+  // the music sets the pace; with silence the show drifts slowly on its own
+  time+=dt*(.35+e*1.4);
+  sceneTime+=dt;
+  if(autoOn&&started&&switching===0&&((beatsInScene>=64&&hit)||sceneTime>75||(quiet>6&&sceneTime>40)))setScene(scene+1);
+  if(hit&&beatsInScene%16===0&&beatsInScene>0)nextPalette(1);
+  if(!hit&&sceneTime>0&&Math.floor((sceneTime-dt)/30)!==Math.floor(sceneTime/30)&&!beats.bpm())nextPalette(1);
+  palMix=Math.min(1,palMix+dt/2.5);
+  // a scene change: dip to black over the trails, swap, rise again
+  if(switching===1){fade-=dt*2.2;if(fade<=0){fade=0;scene=pendingScene;switching=2;}}
+  else if(switching===2){fade+=dt*1.4;if(fade>=1){fade=1;switching=0;}}
+  trailBoost=Math.max(0,trailBoost-dt*.6);
+  kaleido+=(kaleidoTarget-kaleido)*Math.min(1,dt*2);
+
+  theta+=dt*(.04+e*.32)+(hit?.02:0);
+  dive+=dt*(.1+e*.75);
+  rotA+=dt*(.03+level.mid*.35)*(scene===1?1:.6);
+  yaw+=dt*(.08+e*.5);
+  var kr=.5*Math.cos(theta)-.25*Math.cos(2*theta),ki=.5*Math.sin(theta)-.25*Math.sin(2*theta);
+  // just inside the main cardioid's edge, nudged out by the bass, where Julia sets are most alive
+  var push=1.01+.035*Math.sin(time*.23)+bass*.03,center=[-.12,0];
+  kr=center[0]+(kr-center[0])*push;ki=center[1]+(ki-center[1])*push;
+  // the dive repeats every 9 e-folds of zoom; the dip in brightness at the wrap is hidden by the trails
+  var DIVE=9.2,ph=dive%DIVE,zoomT=2.6*Math.exp(-ph),wrapFade=Math.min(1,ph/.6,(DIVE-ph)/.6);
+  var zoom=scene===0?1/(1+bass*.28):zoomT;
+  var iter=scene===0?Math.round(90+70*Math.min(1,e*2)):Math.round(160+ph*55);
+  var power=6.5+2*Math.sin(time*.11)+bass*2.2,dist=2.45-bass*.22;
+  var pitch=.35+.25*Math.sin(time*.07);
+
+  var src=ping[cur],dst=1-cur;
+  gl.bindFramebuffer(gl.FRAMEBUFFER,fbo[dst]);gl.viewport(0,0,W,H);
+  gl.useProgram(PS.p);var u=PS.u;
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,src);gl.uniform1i(u.uPrev,0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,specTex);
+  gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,SPEC_N,1,gl.RED,gl.UNSIGNED_BYTE,specBuf);gl.uniform1i(u.uSpec,1);
+  gl.uniform2f(u.uRes,W,H);gl.uniform1f(u.uTime,time);
+  gl.uniform1f(u.uBass,bass);gl.uniform1f(u.uLow,level.low);gl.uniform1f(u.uMid,level.mid);gl.uniform1f(u.uHigh,level.high);gl.uniform1f(u.uEnergy,e);
+  gl.uniform1f(u.uBeat,beatPulse);gl.uniform1f(u.uFade,fade*(scene===1?wrapFade:1));
+  gl.uniform1f(u.uTrail,Math.min(.97,.72+e*.12+trailBoost*.2));
+  gl.uniform1f(u.uRing,ringOn&&started?1:0);gl.uniform1f(u.uKaleido,kaleido);gl.uniform1f(u.uFlow,.06+e*.1);
+  gl.uniform3fv(u.uA,flat(palFrom));gl.uniform3fv(u.uB,flat(pal));gl.uniform1f(u.uMix,palMix*palMix*(3-2*palMix));
+  gl.uniform1i(u.uScene,scene);gl.uniform1i(u.uIter,iter);
+  gl.uniform2f(u.uK,kr,ki);gl.uniform2f(u.uC0,C0[0],C0[1]);
+  gl.uniform1f(u.uZoom,zoom);gl.uniform1f(u.uRot,rotA);gl.uniform1f(u.uPower,power);
+  gl.uniform3f(u.uEye,dist*Math.cos(pitch)*Math.cos(yaw),dist*Math.cos(pitch)*Math.sin(yaw),dist*Math.sin(pitch));
+  gl.drawArrays(gl.TRIANGLES,0,3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,W,H);
+  gl.useProgram(PC.p);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,ping[dst]);gl.uniform1i(PC.u.uTex,0);gl.uniform2f(PC.u.uRes,W,H);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+  cur=dst;
+
+  statusTick+=dt;
+  if(statusTick>.25){
+    statusTick=0;
+    sceneEl.textContent=SCENES[scene];
+    var bpm=beats.bpm(),parts=[current?current.label:"",bpm?bpm+" BPM":"",PALETTES[pal][0]];
+    if(performance.now()<flashUntil)parts=[flashText];
+    statusEl.textContent=parts.filter(Boolean).join(" · ");
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+document.getElementById("useMic").focus({preventScroll:true});
+// for screenshots and tests: ?demo starts the demo track (browsers may still hold the sound until a click)
+if(/[?&]demo/.test(location.search))useDemo();
+var qs=/[?&]scene=(\d)/.exec(location.search);if(qs){scene=+qs[1];}
+window.__vis={get beats(){return beatsTotal;},get level(){return level;},get scene(){return scene;},get bpm(){return beats.bpm();},setScene:setScene};
+})();
+</script>
+</body>
+</html>
